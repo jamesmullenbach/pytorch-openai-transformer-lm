@@ -9,13 +9,14 @@ from sklearn.metrics import accuracy_score
 from sklearn.utils import shuffle
 
 from analysis import rocstories as rocstories_analysis
-from datasets import rocstories
+from analysis import pw as pw_analysis
+from datasets import pw, rocstories
 from model_pytorch import DoubleHeadModel, load_openai_pretrained_model
 from opt import OpenAIAdam
 from text_utils import TextEncoder
 from utils import (encode_dataset, iter_data,
                    ResultLogger, make_path)
-from loss import MultipleChoiceLossCompute
+from loss import MultipleChoiceLossCompute, ClassificationLossCompute
 
 def transform_roc(X1, X2, X3):
     n_batch = len(X1)
@@ -35,6 +36,26 @@ def transform_roc(X1, X2, X3):
     xmb[:, :, :, 1] = np.arange(n_vocab + n_special, n_vocab + n_special + n_ctx)
     return xmb, mmb
 
+def transform_pw(X1, X2):
+    """
+        Glue stories together with delimiter and stuff, and add position tokens
+    """
+    n_batch = len(X1)
+    xmb = np.zeros((n_batch, n_ctx, 2), dtype=np.int32)
+    mmb = np.zeros((n_batch, n_ctx), dtype=np.float32)
+    start = encoder['_start_']
+    delimiter = encoder['_delimiter_']
+    for i, (x1, x2) in enumerate(zip(X1, X2)):
+        #concatenate
+        x = [start] + x1[:max_len]+[delimiter]+x2[:max_len]+[clf_token]
+        l = len(x)
+        #set np array
+        xmb[i,:l,0] = x
+        #mask
+        mmb[i,:l] = 1
+    #position tokens
+    xmb[:,:,1] = np.arange(n_vocab+n_special, n_vocab+n_special+n_ctx)
+    return xmb, mmb
 
 def iter_apply(Xs, Ms, Ys):
     # fns = [lambda x: np.concatenate(x, 0), lambda x: float(np.sum(x))]
@@ -124,26 +145,37 @@ argmax = lambda x: np.argmax(x, 1)
 
 pred_fns = {
     'rocstories': argmax,
+    'pw': argmax,
 }
 
 filenames = {
     'rocstories': 'ROCStories.tsv',
+    'pw': 'pw_preds.tsv',
 }
 
 label_decoders = {
     'rocstories': None,
+    'pw': None,
+}
+
+analyses = {
+    'rocstories': rocstories_analysis,
+    'pw': pw_analysis
 }
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--desc', type=str, help="Description")
-    parser.add_argument('--dataset', type=str)
+    parser.add_argument('--dataset', choices=['pw', 'rocstories'])
     parser.add_argument('--log_dir', type=str, default='log/')
     parser.add_argument('--save_dir', type=str, default='save/')
     parser.add_argument('--data_dir', type=str, default='data/')
     parser.add_argument('--submission_dir', type=str, default='submission/')
     parser.add_argument('--submit', action='store_true')
     parser.add_argument('--analysis', action='store_true')
+    parser.add_argument('--ordinal', action='store_true', help="flag to do 5-class prediction instead of binary")
+    parser.add_argument('--test', action='store_true', help="flag to run on test")
+    parser.add_argument('--freeze_lm', action='store_true', help="flag to freeze (not update) LM weights - only train the classifier")
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--n_iter', type=int, default=3)
     parser.add_argument('--n_batch', type=int, default=8)
@@ -194,42 +226,61 @@ if __name__ == '__main__':
     n_gpu = torch.cuda.device_count()
     print("device", device, "n_gpu", n_gpu)
 
-    logger = ResultLogger(path=os.path.join(log_dir, '{}.jsonl'.format(desc)), **args.__dict__)
+    log_file = os.path.join(log_dir, '{}.jsonl'.format(desc))
+    logger = ResultLogger(path=log_file, **args.__dict__)
+    # formatting stuff
     text_encoder = TextEncoder(args.encoder_path, args.bpe_path)
     encoder = text_encoder.encoder
     n_vocab = len(text_encoder.encoder)
 
     print("Encoding dataset...")
-    ((trX1, trX2, trX3, trY),
-     (vaX1, vaX2, vaX3, vaY),
-     (teX1, teX2, teX3)) = encode_dataset(*rocstories(data_dir, n_valid=args.n_valid),
-                                          encoder=text_encoder)
+    if args.dataset == 'rocstories':
+        (trX1, trX2, trX3, trY), (vaX1, vaX2, vaX3, vaY), (teX1, teX2, teX3) = encode_dataset(rocstories(data_dir), encoder=text_encoder)
+    elif args.dataset == 'pw':
+        #import pdb; pdb.set_trace()
+        (trX1, trX2, trY), (vaX1, vaX2, vaY), (teX1, teX2, teY) = encode_dataset(pw(data_dir, args.ordinal), encoder=text_encoder)
+    #output: unpadded lists of word indices
+
+    #special tokens
     encoder['_start_'] = len(encoder)
     encoder['_delimiter_'] = len(encoder)
     encoder['_classify_'] = len(encoder)
     clf_token = encoder['_classify_']
+
+    #number of special characters
     n_special = 3
+
     max_len = n_ctx // 2 - 2
-    n_ctx = min(max(
-        [len(x1[:max_len]) + max(len(x2[:max_len]),
-                                 len(x3[:max_len])) for x1, x2, x3 in zip(trX1, trX2, trX3)]
-        + [len(x1[:max_len]) + max(len(x2[:max_len]),
-                                   len(x3[:max_len])) for x1, x2, x3 in zip(vaX1, vaX2, vaX3)]
-        + [len(x1[:max_len]) + max(len(x2[:max_len]),
-                                   len(x3[:max_len])) for x1, x2, x3 in zip(teX1, teX2, teX3)]
-        ) + 3, n_ctx)
+    #get max length of story + answer in train, val, test
+    #take min of (that + 3), n_ctx
+    #the 3 is to take care of the special start, delimiter, end tokens
+    if args.dataset == 'rocstories':
+        n_ctx = min(max([len(x1[:max_len])+max(len(x2[:max_len]), len(x3[:max_len])) for x1, x2, x3 in zip(trX1, trX2, trX3)]+[len(x1[:max_len])+max(len(x2[:max_len]), len(x3[:max_len])) for x1, x2, x3 in zip(vaX1, vaX2, vaX3)]+[len(x1[:max_len])+max(len(x2[:max_len]), len(x3[:max_len])) for x1, x2, x3 in zip(teX1, teX2, teX3)])+n_special, n_ctx)
+    elif args.dataset == 'pw':
+        n_ctx = min(max([len(x1[:max_len])+len(x2[:max_len]) for x1, x2 in zip(trX1, trX2)]+[len(x1[:max_len])+len(x2[:max_len]) for x1, x2 in zip(vaX1, vaX2)]+[len(x1[:max_len])+len(x2[:max_len]) for x1, x2 in zip(teX1, teX2)])+n_special, n_ctx)
+
     vocab = n_vocab + n_special + n_ctx
-    trX, trM = transform_roc(trX1, trX2, trX3)
-    vaX, vaM = transform_roc(vaX1, vaX2, vaX3)
-    if submit:
-        teX, teM = transform_roc(teX1, teX2, teX3)
+    if args.dataset == 'rocstories':
+        trX, trM = transform_roc(trX1, trX2, trX3)
+        vaX, vaM = transform_roc(vaX1, vaX2, vaX3)
+        if submit:
+            teX, teM = transform_roc(teX1, teX2, teX3)
+    elif args.dataset == 'pw':
+        trX, trM = transform_pw(trX1, trX2)
+        vaX, vaM = transform_pw(vaX1, vaX2)
+        if submit:
+            teX, teM = transform_pw(teX1, teX2)
 
     n_train = len(trY)
     n_valid = len(vaY)
     n_batch_train = args.n_batch * max(n_gpu, 1)
     n_updates_total = (n_train // n_batch_train) * args.n_iter
 
-    dh_model = DoubleHeadModel(args, clf_token, 'multiple_choice', vocab, n_ctx)
+    if args.dataset == 'rocstories':
+        task = 'multiple_choice'
+    elif args.dataset == 'pw':
+        task = ('inference', 5 if args.ordinal else 2)
+    dh_model = DoubleHeadModel(args, clf_token, task, vocab, n_ctx)
 
     criterion = nn.CrossEntropyLoss(reduce=False)
     model_opt = OpenAIAdam(dh_model.parameters(),
@@ -243,10 +294,16 @@ if __name__ == '__main__':
                            l2=args.l2,
                            vector_l2=args.vector_l2,
                            max_grad_norm=args.max_grad_norm)
-    compute_loss_fct = MultipleChoiceLossCompute(criterion,
-                                                 criterion,
-                                                 args.lm_coef,
-                                                 model_opt)
+    if args.dataset == 'rocstories':
+        compute_loss_fct = MultipleChoiceLossCompute(criterion,
+                                                     criterion,
+                                                     args.lm_coef,
+                                                     model_opt)
+    elif args.dataset == 'pw':
+        compute_loss_fct = ClassificationLossCompute(criterion,
+                                                     criterion,
+                                                     args.lm_coef,
+                                                     model_opt)
     load_openai_pretrained_model(dh_model.transformer, n_ctx=n_ctx, n_special=n_special)
 
     dh_model.to(device)
@@ -265,10 +322,11 @@ if __name__ == '__main__':
         run_epoch()
         n_epochs += 1
         log(save_dir, desc)
+
     if submit:
         path = os.path.join(save_dir, desc, 'best_params')
         dh_model.load_state_dict(torch.load(path))
-        predict(dataset, args.submission_dir)
+        predict(dataset, args.submission_dir, args.test)
         if args.analysis:
-            rocstories_analysis(data_dir, os.path.join(args.submission_dir, 'ROCStories.tsv'),
-                                os.path.join(log_dir, 'rocstories.jsonl'))
+            analy_fn = analyses[dataset]
+            analy_fn(data_dir, os.path.join(args.submission_dir, filenames[dataset]), os.path.join(log_dir, log_file), test=args.test, ordinal=args.ordinal)

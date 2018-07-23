@@ -111,3 +111,8 @@ venv.bak/
 # mypy
 .mypy_cache/cloze_data
 cloze_data/
+
+#result dirs
+log/
+save/
+submission/

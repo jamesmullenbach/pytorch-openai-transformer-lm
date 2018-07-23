@@ -283,10 +283,14 @@ class DoubleHeadModel(nn.Module):
                 raise ValueError("task_head_type is expected to be 'multiple_choice' "
                                  "'similarity', 'inference' or ('classification', n_class) "
                                  f"got {task_head_type}.")
-        elif isinstance(task_head_type, collections.abc.Sequence) and len(task_head_type) == 2 and \
-             task_head_type[0] == 'classification':
+        elif isinstance(task_head_type, collections.abc.Sequence) and len(task_head_type) == 2:
             n_class = task_head_type[1]
-            self.task_head = ClfHead(clf_token, cfg, n_class)
+            if task_head_type[0] in  ['classification', 'inference']:
+                self.task_head = ClfHead(clf_token, cfg, n_class)
+            else:
+                raise ValueError("task_head_type is expected to be 'multiple_choice' "
+                                 "'similarity', 'inference' or ('classification', n_class) "
+                                 f"got {task_head_type}.")
         else:
             raise ValueError("task_head_type is expected to be 'multiple_choice' "
                              "'similarity', 'inference' or ('classification', n_class) "
