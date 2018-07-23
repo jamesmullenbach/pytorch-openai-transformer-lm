@@ -297,9 +297,10 @@ class DoubleHeadModel(nn.Module):
                              f"got {task_head_type}.")
 
     def forward(self, x):
-        h = self.transformer(x)
-        lm_logits = self.lm_head(h)
-        task_logits = self.task_head(h, x)
+        hs = self.transformer(x)
+        import pdb; pdb.set_trace()
+        lm_logits = self.lm_head(hs)
+        task_logits = self.task_head(hs, x)
 
         return lm_logits, task_logits
 

@@ -176,6 +176,7 @@ if __name__ == '__main__':
     parser.add_argument('--ordinal', action='store_true', help="flag to do 5-class prediction instead of binary")
     parser.add_argument('--test', action='store_true', help="flag to run on test")
     parser.add_argument('--freeze_lm', action='store_true', help="flag to freeze (not update) LM weights - only train the classifier")
+    parser.add_argument('--hard_select', action='store_true', help="flag to use as final layer representation the concatenation of hidden states at appropriate indices of input")
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--n_iter', type=int, default=3)
     parser.add_argument('--n_batch', type=int, default=8)
@@ -237,8 +238,8 @@ if __name__ == '__main__':
     if args.dataset == 'rocstories':
         (trX1, trX2, trX3, trY), (vaX1, vaX2, vaX3, vaY), (teX1, teX2, teX3) = encode_dataset(rocstories(data_dir), encoder=text_encoder)
     elif args.dataset == 'pw':
-        #import pdb; pdb.set_trace()
-        (trX1, trX2, trY), (vaX1, vaX2, vaY), (teX1, teX2, teY) = encode_dataset(pw(data_dir, args.ordinal), encoder=text_encoder)
+        data = pw(data_dir, args.ordinal, args.hard_select)
+        (trX1, trX2, trY), (vaX1, vaX2, vaY), (teX1, teX2, teY) = encode_dataset(data, encoder=text_encoder)
     #output: unpadded lists of word indices
 
     #special tokens
