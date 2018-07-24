@@ -33,12 +33,15 @@ def read_pws(path, ordinal, hard_select):
         prems = []
         hyps = []
         y = []
+        trips = []
         for line in f:
             example = json.loads(line.strip())
             prems.append(example['sentence1'])
             hyps.append(example['sentence2'])
+            if hard_select:
+                trips.append((example['whole'], example['part'], example['jj']))
             y.append(int(example['label' if ordinal else 'bin_label']))
-        return prems, hyps, y
+        return prems, hyps, y, trips
 
 def rocstories(data_dir, n_train=1497, n_valid=374):
     storys, comps1, comps2, ys = _rocstories(os.path.join(data_dir, 'cloze_test_val__spring2016 - cloze_test_ALL_val.csv'))
@@ -64,10 +67,13 @@ def rocstories(data_dir, n_train=1497, n_valid=374):
     return (trX1, trX2, trX3, trY), (vaX1, vaX2, vaX3, vaY), (teX1, teX2, teX3)
 
 def pw(data_dir, ordinal, hard_select):
-    tr_prems, tr_hyps, trY = read_pws(os.path.join(data_dir, 'snli_style_train_feats.jsonl'), ordinal, hard_select)
-    dv_prems, dv_hyps, dvY = read_pws(os.path.join(data_dir, 'snli_style_dev_feats.jsonl'), ordinal, hard_select)
-    te_prems, te_hyps, teY = read_pws(os.path.join(data_dir, 'snli_style_test_feats.jsonl'), ordinal, hard_select)
+    tr_prems, tr_hyps, trY, trtrips = read_pws(os.path.join(data_dir, 'snli_style_train_feats.jsonl'), ordinal, hard_select)
+    dv_prems, dv_hyps, dvY, dvtrips = read_pws(os.path.join(data_dir, 'snli_style_dev_feats.jsonl'), ordinal, hard_select)
+    te_prems, te_hyps, teY, tetrips = read_pws(os.path.join(data_dir, 'snli_style_test_feats.jsonl'), ordinal, hard_select)
     trY = np.asarray(trY, dtype=np.int32)
     dvY = np.asarray(dvY, dtype=np.int32)
     teY = np.asarray(teY, dtype=np.int32)
-    return (tr_prems, tr_hyps, trY), (dv_prems, dv_hyps, dvY), (te_prems, te_hyps, teY)
+    if any(trtrips) and any(dvtrips) and any(tetrips):
+        return (tr_prems, tr_hyps, trY), (dv_prems, dv_hyps, dvY), (te_prems, te_hyps, teY), (trtrips, dvtrips, tetrips)
+    else:
+        return (tr_prems, tr_hyps, trY), (dv_prems, dv_hyps, dvY), (te_prems, te_hyps, teY)

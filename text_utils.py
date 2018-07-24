@@ -91,18 +91,35 @@ class TextEncoder(object):
 
     def encode(self, texts, verbose=True):
         texts_tokens = []
-        if verbose:
-            for text in tqdm(texts, ncols=80, leave=False):
-                text = self.nlp(text_standardize(ftfy.fix_text(text)))
-                text_tokens = []
-                for token in text:
-                    text_tokens.extend([self.encoder.get(t, 0) for t in self.bpe(token.text.lower()).split(' ')])
-                texts_tokens.append(text_tokens)
-        else:
-            for text in texts:
-                text = self.nlp(text_standardize(ftfy.fix_text(text)))
-                text_tokens = []
-                for token in text:
-                    text_tokens.extend([self.encoder.get(t, 0) for t in self.bpe(token.text.lower()).split(' ')])
-                texts_tokens.append(text_tokens)
+        for text in tqdm(texts, ncols=80, leave=False, disable=not verbose):
+            text = self.nlp(text_standardize(ftfy.fix_text(text)))
+            text_tokens = []
+            for token in text:
+                text_tokens.extend([self.encoder.get(t, 0) for t in self.bpe(token.text.lower()).split(' ')])
+            texts_tokens.append(text_tokens)
         return texts_tokens
+
+class TextSelectIndexEncoder(TextEncoder):
+
+    def encode(self, texts, fieldnum, triples=None, verbose=True):
+        texts_tokens = []
+        locs = []
+        for text, triple in tqdm(zip(texts, triples), ncols=80, leave=False, disable=not verbose):
+            text = self.nlp(text_standardize(ftfy.fix_text(text)))
+            text_tokens = []
+            loc = [-1,-1,-1]
+            for token in text:
+                for t in self.bpe(token.text.lower()).split(' '):
+                    stem = t.split('</w>')[0]
+                    if fieldnum == 0:
+                        if stem == triple[0]:
+                            loc[0] = len(text_tokens)
+                        elif stem == triple[2]:
+                            loc[2] = len(text_tokens)
+                    elif fieldnum == 2 and stem == triple[1]:
+                        loc[1] = len(text_tokens)
+                    text_tokens.append(self.encoder.get(t,0))
+            texts_tokens.append(text_tokens)
+            locs.append(loc)
+        return texts_tokens, locs
+

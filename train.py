@@ -13,7 +13,7 @@ from analysis import pw as pw_analysis
 from datasets import pw, rocstories
 from model_pytorch import DoubleHeadModel, load_openai_pretrained_model
 from opt import OpenAIAdam
-from text_utils import TextEncoder
+from text_utils import TextEncoder, TextSelectIndexEncoder
 from utils import (encode_dataset, iter_data,
                    ResultLogger, make_path)
 from loss import MultipleChoiceLossCompute, ClassificationLossCompute
@@ -230,7 +230,10 @@ if __name__ == '__main__':
     log_file = os.path.join(log_dir, '{}.jsonl'.format(desc))
     logger = ResultLogger(path=log_file, **args.__dict__)
     # formatting stuff
-    text_encoder = TextEncoder(args.encoder_path, args.bpe_path)
+    if args.hard_select:
+        text_encoder = TextSelectIndexEncoder(args.encoder_path, args.bpe_path)
+    else:
+        text_encoder = TextEncoder(args.encoder_path, args.bpe_path)
     encoder = text_encoder.encoder
     n_vocab = len(text_encoder.encoder)
 
@@ -238,8 +241,13 @@ if __name__ == '__main__':
     if args.dataset == 'rocstories':
         (trX1, trX2, trX3, trY), (vaX1, vaX2, vaX3, vaY), (teX1, teX2, teX3) = encode_dataset(rocstories(data_dir), encoder=text_encoder)
     elif args.dataset == 'pw':
-        data = pw(data_dir, args.ordinal, args.hard_select)
-        (trX1, trX2, trY), (vaX1, vaX2, vaY), (teX1, teX2, teY) = encode_dataset(data, encoder=text_encoder)
+        if args.hard_select:
+            trdata, dvdata, tedata, triples = pw(data_dir, args.ordinal, args.hard_select)
+            texts_tokens, locs = encode_dataset((trdata, dvdata, tedata), encoder=text_encoder, triples=triples)
+            (trX1, trX2, trY), (vaX1, vaX2, vaY), (teX1, teX2, teY) = texts_tokens
+            import pdb; pdb.set_trace()
+        else:
+            (trX1, trX2, trY), (vaX1, vaX2, vaY), (teX1, teX2, teY) = encode_dataset(pw(data_dir, args.ordinal, args.hard_select), encoder=text_encoder)
     #output: unpadded lists of word indices
 
     #special tokens

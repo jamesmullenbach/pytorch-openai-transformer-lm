@@ -8,16 +8,27 @@ import numpy as np
 # from tensorflow.python.framework import function
 from tqdm import tqdm
 
-def encode_dataset(*splits, encoder):
+def encode_dataset(*splits, encoder, triples=None):
     encoded_splits = []
-    for split in splits[0]:
+    triple_locs = []
+    for fold, split in enumerate(splits[0]):
         fields = []
-        for field in split:
+        locs = []
+        for fieldnum, field in enumerate(split):
             if isinstance(field[0], str):
-                field = encoder.encode(field)
+                if triples:
+                    field, loc = encoder.encode(field, fieldnum, triples=triples[fold])
+                    locs.append(loc)
+                else:
+                    field = encoder.encode(field)
             fields.append(field)
         encoded_splits.append(fields)
-    return encoded_splits
+        if triples:
+            triple_locs.append(locs)
+    if any(triple_locs):
+        return encoded_splits, triple_locs
+    else:
+        return encoded_splits
 
 def stsb_label_encoding(labels, nclass=6):
     """
