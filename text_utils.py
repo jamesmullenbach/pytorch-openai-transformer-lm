@@ -116,7 +116,7 @@ class TextSelectIndexEncoder(TextEncoder):
                             loc[0] = len(text_tokens)
                         elif stem == triple[2]:
                             loc[2] = len(text_tokens)
-                    elif fieldnum == 2 and stem == triple[1]:
+                    elif fieldnum == 1 and stem == triple[1]:
                         loc[1] = len(text_tokens)
                     text_tokens.append(self.encoder.get(t,0))
             texts_tokens.append(text_tokens)

@@ -36,16 +36,25 @@ def transform_roc(X1, X2, X3):
     xmb[:, :, :, 1] = np.arange(n_vocab + n_special, n_vocab + n_special + n_ctx)
     return xmb, mmb
 
-def transform_pw(X1, X2):
+def transform_pw(X1, X2, locs=None):
     """
         Glue stories together with delimiter and stuff, and add position tokens
     """
     n_batch = len(X1)
     xmb = np.zeros((n_batch, n_ctx, 2), dtype=np.int32)
     mmb = np.zeros((n_batch, n_ctx), dtype=np.float32)
+    lmb = np.zeros((n_batch, 3), dtype=np.int32)
     start = encoder['_start_']
     delimiter = encoder['_delimiter_']
-    for i, (x1, x2) in enumerate(zip(X1, X2)):
+    fields = (X1, X2, *locs) if locs else (X1, X2)
+    for i, (data) in enumerate(zip(*fields)):
+        if locs:
+            x1, x2, *loc = data
+            #combine context and part locs. add to compensate for premise and delimiters
+            loc = [loc[0][0]+1, loc[1][1]+len(x1)+2, loc[0][2]+1]
+            lmb[i] = loc
+        else:
+            x1, x2 = data
         #concatenate
         x = [start] + x1[:max_len]+[delimiter]+x2[:max_len]+[clf_token]
         l = len(x)
@@ -55,20 +64,29 @@ def transform_pw(X1, X2):
         mmb[i,:l] = 1
     #position tokens
     xmb[:,:,1] = np.arange(n_vocab+n_special, n_vocab+n_special+n_ctx)
-    return xmb, mmb
+    return xmb, mmb, lmb
 
-def iter_apply(Xs, Ms, Ys):
+def iter_apply(Xs, Ms, Ys, Ls=None):
     # fns = [lambda x: np.concatenate(x, 0), lambda x: float(np.sum(x))]
+    fields = (Xs, Ms, Ys, Ls) if Ls is not None else (Xs, Ms, Ys)
     logits = []
     cost = 0
     with torch.no_grad():
         dh_model.eval()
-        for xmb, mmb, ymb in iter_data(Xs, Ms, Ys, n_batch=n_batch_train, truncate=False, verbose=True):
+        for field in iter_data(*fields, n_batch=n_batch_train, truncate=False, verbose=True):
+            if len(fields) == 3:
+                xmb, mmb, ymb = field
+            else:
+                xmb, mmb, ymb, lmb = field
             n = len(xmb)
             XMB = torch.tensor(xmb, dtype=torch.long).to(device)
             YMB = torch.tensor(ymb, dtype=torch.long).to(device)
             MMB = torch.tensor(mmb).to(device)
-            _, clf_logits = dh_model(XMB)
+            if len(fields) > 3:
+                LMB = torch.tensor(lmb, dtype=torch.long).to(device)
+                _, clf_logits = dh_model(XMB, LMB)
+            else:
+                _, clf_logits = dh_model(XMB)
             clf_logits *= n
             clf_losses = compute_loss_fct(XMB, YMB, MMB, clf_logits, only_return_losses=True)
             clf_losses *= n
@@ -78,25 +96,39 @@ def iter_apply(Xs, Ms, Ys):
     return logits, cost
 
 
-def iter_predict(Xs, Ms):
+def iter_predict(Xs, Ms, Ls=None):
     logits = []
+    fields = (Xs, Ms, Ls) if Ls is not None else (Xs, Ms)
     with torch.no_grad():
         dh_model.eval()
-        for xmb, mmb in iter_data(Xs, Ms, n_batch=n_batch_train, truncate=False, verbose=True):
+        for field in iter_data(*fields, n_batch=n_batch_train, truncate=False, verbose=True):
+            if len(fields) == 2:
+                xmb, mmb = field
+            else:
+                xmb, mmb, lmb = field
             n = len(xmb)
             XMB = torch.tensor(xmb, dtype=torch.long).to(device)
             MMB = torch.tensor(mmb).to(device)
-            _, clf_logits = dh_model(XMB)
+            if len(fields) > 2:
+                LMB = torch.tensor(lmb, dtype=torch.long).to(device)
+                _, clf_logits = dh_model(XMB, LMB)
+            else:
+                _, clf_logits = dh_model(XMB)
             logits.append(clf_logits.to("cpu").numpy())
     logits = np.concatenate(logits, 0)
     return logits
 
 
-def log(save_dir, desc):
+def log(save_dir, desc, hard_select):
     global best_score
     print("Logging")
-    tr_logits, tr_cost = iter_apply(trX[:n_valid], trM[:n_valid], trY[:n_valid])
-    va_logits, va_cost = iter_apply(vaX, vaM, vaY)
+    tr_inps = trX[:n_valid], trM[:n_valid], trY[:n_valid]
+    va_inps = vaX, vaM, vaY
+    if hard_select:
+        tr_inps = (*tr_inps, trL[:n_valid])
+        va_inps = (*va_inps, vaL)
+    tr_logits, tr_cost = iter_apply(*tr_inps)
+    va_logits, va_cost = iter_apply(*va_inps)
     tr_cost = tr_cost / len(trY[:n_valid])
     va_cost = va_cost / n_valid
     tr_acc = accuracy_score(trY[:n_valid], np.argmax(tr_logits, 1)) * 100.
@@ -111,11 +143,15 @@ def log(save_dir, desc):
             torch.save(dh_model.state_dict(), make_path(path))
 
 
-def predict(dataset, submission_dir):
+def predict(dataset, submission_dir, test, hard_select):
     filename = filenames[dataset]
     pred_fn = pred_fns[dataset]
     label_decoder = label_decoders[dataset]
-    predictions = pred_fn(iter_predict(teX, teM))
+    fields = (teX, teM, teL) if hard_select else (teX, teM)
+    try:
+        predictions = pred_fn(iter_predict(*fields))
+    except:
+        import pdb; pdb.set_trace()
     if label_decoder is not None:
         predictions = [label_decoder[prediction] for prediction in predictions]
     path = os.path.join(submission_dir, filename)
@@ -126,15 +162,23 @@ def predict(dataset, submission_dir):
             f.write('{}\t{}\n'.format(i, prediction))
 
 
-def run_epoch():
-    for xmb, mmb, ymb in iter_data(*shuffle(trX, trM, trYt, random_state=np.random),
+def run_epoch(fields):
+    for field in iter_data(*shuffle(*fields, random_state=np.random),
                                    n_batch=n_batch_train, truncate=True, verbose=True):
         global n_updates
         dh_model.train()
+        if len(fields) == 3:
+            xmb, mmb, ymb = field
+        else:
+            xmb, mmb, ymb, lmb = field
         XMB = torch.tensor(xmb, dtype=torch.long).to(device)
         YMB = torch.tensor(ymb, dtype=torch.long).to(device)
         MMB = torch.tensor(mmb).to(device)
-        lm_logits, clf_logits = dh_model(XMB)
+        if len(fields) > 3:
+            LMB = torch.tensor(lmb, dtype=torch.long).to(device)
+            lm_logits, clf_logits = dh_model(XMB, LMB)
+        else:
+            lm_logits, clf_logits = dh_model(XMB)
         compute_loss_fct(XMB, YMB, MMB, clf_logits, lm_logits)
         n_updates += 1
         if n_updates in [1000, 2000, 4000, 8000, 16000, 32000] and n_epochs == 0:
@@ -245,7 +289,6 @@ if __name__ == '__main__':
             trdata, dvdata, tedata, triples = pw(data_dir, args.ordinal, args.hard_select)
             texts_tokens, locs = encode_dataset((trdata, dvdata, tedata), encoder=text_encoder, triples=triples)
             (trX1, trX2, trY), (vaX1, vaX2, vaY), (teX1, teX2, teY) = texts_tokens
-            import pdb; pdb.set_trace()
         else:
             (trX1, trX2, trY), (vaX1, vaX2, vaY), (teX1, teX2, teY) = encode_dataset(pw(data_dir, args.ordinal, args.hard_select), encoder=text_encoder)
     #output: unpadded lists of word indices
@@ -275,10 +318,16 @@ if __name__ == '__main__':
         if submit:
             teX, teM = transform_roc(teX1, teX2, teX3)
     elif args.dataset == 'pw':
-        trX, trM = transform_pw(trX1, trX2)
-        vaX, vaM = transform_pw(vaX1, vaX2)
-        if submit:
-            teX, teM = transform_pw(teX1, teX2)
+        if args.hard_select:
+            trX, trM, trL = transform_pw(trX1, trX2, locs[0])
+            vaX, vaM, vaL = transform_pw(vaX1, vaX2, locs[1])
+            if submit:
+                teX, teM, teL = transform_pw(teX1, teX2, locs[2])
+        else:
+            trX, trM, _ = transform_pw(trX1, trX2)
+            vaX, vaM, _ = transform_pw(vaX1, vaX2)
+            if submit:
+                teX, teM, _ = transform_pw(teX1, teX2)
 
     n_train = len(trY)
     n_valid = len(vaY)
@@ -289,7 +338,7 @@ if __name__ == '__main__':
         task = 'multiple_choice'
     elif args.dataset == 'pw':
         task = ('inference', 5 if args.ordinal else 2)
-    dh_model = DoubleHeadModel(args, clf_token, task, vocab, n_ctx)
+    dh_model = DoubleHeadModel(args, clf_token, task, vocab, n_ctx, hard_select=args.hard_select)
 
     criterion = nn.CrossEntropyLoss(reduce=False)
     model_opt = OpenAIAdam(dh_model.parameters(),
@@ -326,16 +375,17 @@ if __name__ == '__main__':
         path = os.path.join(save_dir, desc, 'best_params')
         torch.save(dh_model.state_dict(), make_path(path))
     best_score = 0
+    fields = (trX, trM, trYt, trL) if args.hard_select else (trX, trM, trYt)
     for i in range(args.n_iter):
-        print("running epoch", i)
-        run_epoch()
+        #print("running epoch", i)
+        #run_epoch(fields)
         n_epochs += 1
-        log(save_dir, desc)
+        log(save_dir, desc, args.hard_select)
 
     if submit:
         path = os.path.join(save_dir, desc, 'best_params')
         dh_model.load_state_dict(torch.load(path))
-        predict(dataset, args.submission_dir, args.test)
+        predict(dataset, args.submission_dir, args.test, args.hard_select)
         if args.analysis:
             analy_fn = analyses[dataset]
             analy_fn(data_dir, os.path.join(args.submission_dir, filenames[dataset]), os.path.join(log_dir, log_file), test=args.test, ordinal=args.ordinal)

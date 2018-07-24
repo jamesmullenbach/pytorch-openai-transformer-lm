@@ -241,6 +241,20 @@ class ClfHead(nn.Module):
 
         return clf_logits
 
+class ClfSelectHead(ClfHead):
+    def __init__(self, clf_token, cfg, n_class):
+        super(ClfSelectHead, self).__init__(clf_token, cfg, n_class)
+        self.linear = nn.Linear(cfg.n_embd*3, n_class)
+        nn.init.normal_(self.linear.weight, std = 0.02)
+        nn.init.normal_(self.linear.bias, 0)
+
+    def forward(self, hs, ls):
+        #select whole, part, jj vectors
+        hss = hs.gather(1, ls.unsqueeze(2).expand(-1, -1, self.n_embd))
+        clf_h = hss.view(hss.size(0), -1)
+        clf_logits = self.linear(clf_h)
+        return clf_logits
+
 class SimilarityHead(nn.Module):
     """ Similarity Head for the transformer
 
@@ -267,7 +281,7 @@ class SimilarityHead(nn.Module):
 
 class DoubleHeadModel(nn.Module):
     """ Transformer with language model and task specific heads """
-    def __init__(self, cfg, clf_token, task_head_type, vocab=40990, n_ctx=512):
+    def __init__(self, cfg, clf_token, task_head_type, vocab=40990, n_ctx=512, hard_select=False):
         super(DoubleHeadModel, self).__init__()
         self.transformer = TransformerModel(cfg, vocab=vocab, n_ctx=n_ctx)
         self.lm_head = LMHead(self.transformer, cfg)
@@ -278,7 +292,10 @@ class DoubleHeadModel(nn.Module):
                 self.task_head = SimilarityHead(clf_token, cfg)
             elif task_head_type == 'inference':
                 # the three classes correspond to entailment, contradiction and neutral.
-                self.task_head = ClfHead(clf_token, cfg, 3)
+                if hard_select:
+                    self.task_head = ClfSelectHead(clf_token, cfg, 3)
+                else:
+                    self.task_head = ClfHead(clf_token, cfg, 3)
             else:
                 raise ValueError("task_head_type is expected to be 'multiple_choice' "
                                  "'similarity', 'inference' or ('classification', n_class) "
@@ -286,7 +303,10 @@ class DoubleHeadModel(nn.Module):
         elif isinstance(task_head_type, collections.abc.Sequence) and len(task_head_type) == 2:
             n_class = task_head_type[1]
             if task_head_type[0] in  ['classification', 'inference']:
-                self.task_head = ClfHead(clf_token, cfg, n_class)
+                if hard_select:
+                    self.task_head = ClfSelectHead(clf_token, cfg, 3)
+                else:
+                    self.task_head = ClfHead(clf_token, cfg, n_class)
             else:
                 raise ValueError("task_head_type is expected to be 'multiple_choice' "
                                  "'similarity', 'inference' or ('classification', n_class) "
@@ -296,11 +316,11 @@ class DoubleHeadModel(nn.Module):
                              "'similarity', 'inference' or ('classification', n_class) "
                              f"got {task_head_type}.")
 
-    def forward(self, x):
+    def forward(self, x, l=None):
         hs = self.transformer(x)
-        import pdb; pdb.set_trace()
         lm_logits = self.lm_head(hs)
-        task_logits = self.task_head(hs, x)
+        inp = l if l is not None else x
+        task_logits = self.task_head(hs, inp)
 
         return lm_logits, task_logits
 

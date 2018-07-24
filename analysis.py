@@ -20,7 +20,7 @@ def rocstories(data_dir, pred_path, log_path, **kwargs):
 def pw(data_dir, pred_path, log_path, test=False, ordinal=False):
     preds = pd.read_csv(pred_path, delimiter='\t')['prediction'].values.tolist()
     fold = 'test' if test else 'dev'
-    _, _, labels = read_pws(os.path.join(data_dir, f'snli_style_{fold}_feats.jsonl'), ordinal)
+    _, _, labels, _ = read_pws(os.path.join(data_dir, f'snli_style_{fold}_feats.jsonl'), ordinal, False)
     acc = accuracy_score(labels, preds)*100.
     logs = [json.loads(line) for line in open(log_path)][1:]
     best_validation_index = np.argmax([log['va_acc'] for log in logs])
