@@ -11,7 +11,7 @@ from sklearn.utils import shuffle
 from analysis import rocstories as rocstories_analysis
 from analysis import pw as pw_analysis
 from datasets import pw, rocstories
-from model_pytorch import DoubleHeadModel, load_openai_pretrained_model
+from model_pytorch import DoubleHeadModel, load_openai_pretrained_model, freeze_transformer_params
 from opt import OpenAIAdam
 from text_utils import TextEncoder, TextSelectIndexEncoder
 from utils import (encode_dataset, iter_data,
@@ -148,10 +148,7 @@ def predict(dataset, submission_dir, test, hard_select):
     pred_fn = pred_fns[dataset]
     label_decoder = label_decoders[dataset]
     fields = (teX, teM, teL) if hard_select else (teX, teM)
-    try:
-        predictions = pred_fn(iter_predict(*fields))
-    except:
-        import pdb; pdb.set_trace()
+    predictions = pred_fn(iter_predict(*fields))
     if label_decoder is not None:
         predictions = [label_decoder[prediction] for prediction in predictions]
     path = os.path.join(submission_dir, filename)
@@ -363,6 +360,10 @@ if __name__ == '__main__':
                                                      args.lm_coef,
                                                      model_opt)
     load_openai_pretrained_model(dh_model.transformer, n_ctx=n_ctx, n_special=n_special)
+    if args.freeze_lm:
+        print("freezing params")
+        freeze_transformer_params(dh_model)
+    import pdb; pdb.set_trace()
 
     dh_model.to(device)
     dh_model = nn.DataParallel(dh_model)
@@ -377,8 +378,8 @@ if __name__ == '__main__':
     best_score = 0
     fields = (trX, trM, trYt, trL) if args.hard_select else (trX, trM, trYt)
     for i in range(args.n_iter):
-        #print("running epoch", i)
-        #run_epoch(fields)
+        print("running epoch", i)
+        run_epoch(fields)
         n_epochs += 1
         log(save_dir, desc, args.hard_select)
 

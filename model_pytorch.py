@@ -324,6 +324,17 @@ class DoubleHeadModel(nn.Module):
 
         return lm_logits, task_logits
 
+def freeze_transformer_params(model):
+    for pname in model.state_dict().keys():
+        if pname.startswith('task_head'):
+            continue
+        param = model
+        for subname in pname.split('.'):
+            if subname.isnumeric() and type(param) is nn.ModuleList:
+                param = param[int(subname)]
+            else:
+                param = getattr(param, subname)
+        param.requires_grad = False
 
 def load_openai_pretrained_model(model, n_ctx=-1, n_special=-1, n_transfer=12, n_embd=768, path='./model/',
                                  path_names='./'):
