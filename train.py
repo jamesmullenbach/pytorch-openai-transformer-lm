@@ -363,7 +363,6 @@ if __name__ == '__main__':
     if args.freeze_lm:
         print("freezing params")
         freeze_transformer_params(dh_model)
-    import pdb; pdb.set_trace()
 
     dh_model.to(device)
     dh_model = nn.DataParallel(dh_model)
