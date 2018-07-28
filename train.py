@@ -37,7 +37,7 @@ def transform_roc(X1, X2, X3):
     xmb[:, :, :, 1] = np.arange(n_vocab + n_special, n_vocab + n_special + n_ctx)
     return xmb, mmb
 
-def transform_pw(X1, X2, locs=None):
+def transform_pw(X1, X2, locs=None, hide_words=False):
     """
         Glue stories together with delimiter and stuff, and add position tokens
     """
@@ -64,7 +64,9 @@ def transform_pw(X1, X2, locs=None):
         #mask
         mmb[i,:l] = 1
     #position tokens
-    xmb[:,:,1] = np.arange(n_vocab+n_special, n_vocab+n_special+n_ctx)
+    start = n_vocab + (0 if hide_words else n_special)
+    end = n_vocab + n_ctx + (0 if hide_words else n_special)
+    xmb[:,:,1] = np.arange(start, end)
     return xmb, mmb, lmb
 
 def iter_apply(Xs, Ms, Ys, Ls=None):
@@ -179,7 +181,6 @@ def run_epoch(fields):
             LMB = torch.tensor(lmb, dtype=torch.long).to(device)
             lm_logits, clf_logits = dh_model(XMB, LMB)
         else:
-            import ipdb; ipdb.set_trace()
             lm_logits, clf_logits = dh_model(XMB)
         compute_loss_fct(XMB, YMB, MMB, clf_logits, lm_logits)
         n_updates += 1
@@ -310,6 +311,7 @@ if __name__ == '__main__':
     n_special = 6 if args.hide_words else 3
 
     max_len = n_ctx // 2 - 2
+    n_additions = 0
     #get max length of story + answer in train, val, test
     #take min of (that + 3), n_ctx
     #the 3 is to take care of the special start, delimiter, end tokens
@@ -325,15 +327,15 @@ if __name__ == '__main__':
             teX, teM = transform_roc(teX1, teX2, teX3)
     elif args.dataset == 'pw':
         if args.hard_select:
-            trX, trM, trL = transform_pw(trX1, trX2, locs[0])
-            vaX, vaM, vaL = transform_pw(vaX1, vaX2, locs[1])
+            trX, trM, trL = transform_pw(trX1, trX2, locs[0], hide_words=args.hide_words)
+            vaX, vaM, vaL = transform_pw(vaX1, vaX2, locs[1], hide_words=args.hide_words)
             if submit:
-                teX, teM, teL = transform_pw(teX1, teX2, locs[2])
+                teX, teM, teL = transform_pw(teX1, teX2, locs[2], hide_words=args.hide_words)
         else:
-            trX, trM, _ = transform_pw(trX1, trX2)
-            vaX, vaM, _ = transform_pw(vaX1, vaX2)
+            trX, trM, _ = transform_pw(trX1, trX2, hide_words=args.hide_words)
+            vaX, vaM, _ = transform_pw(vaX1, vaX2, hide_words=args.hide_words)
             if submit:
-                teX, teM, _ = transform_pw(teX1, teX2)
+                teX, teM, _ = transform_pw(teX1, teX2, hide_words=args.hide_words)
 
     n_train = len(trY)
     n_valid = len(vaY)
