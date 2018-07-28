@@ -45,6 +45,10 @@ class TextEncoder(object):
         merges = [tuple(merge.split()) for merge in merges]
         self.bpe_ranks = dict(zip(merges, range(len(merges))))
         self.cache = {}
+        #special tokens
+        self.encoder['_start_'] = len(self.encoder)
+        self.encoder['_delimiter_'] = len(self.encoder)
+        self.encoder['_classify_'] = len(self.encoder)
 
     def bpe(self, token):
         word = tuple(token[:-1]) + ( token[-1] + '</w>',)
@@ -101,7 +105,7 @@ class TextEncoder(object):
 
 class TextSelectIndexEncoder(TextEncoder):
 
-    def encode(self, texts, fieldnum, triples=None, verbose=True):
+    def encode(self, texts, fieldnum, triples=None, hide_words=False, verbose=True):
         texts_tokens = []
         locs = []
         for text, triple in tqdm(zip(texts, triples), ncols=80, leave=False, disable=not verbose):
@@ -122,4 +126,34 @@ class TextSelectIndexEncoder(TextEncoder):
             texts_tokens.append(text_tokens)
             locs.append(loc)
         return texts_tokens, locs
+
+class TextHideWordsEncoder(TextEncoder):
+
+    def __init__(self, encoder_path, bpe_path):
+        super(TextHideWordsEncoder, self).__init__(encoder_path, bpe_path)
+        #add special tokens
+        self.encoder['_WHOLE_'] = len(self.encoder)
+        self.encoder['_PART_'] = len(self.encoder)
+        self.encoder['_ADJECTIVE_'] = len(self.encoder)
+
+    def encode(self, texts, triples=None, verbose=True):
+        texts_tokens = []
+        for text, triple in tqdm(zip(texts, triples), ncols=80, leave=False, disable=not verbose):
+            text = self.nlp(text_standardize(ftfy.fix_text(text)))
+            text_tokens = []
+            for token in text:
+                for t in self.bpe(token.text.lower()).split(' '):
+                    stem = t.split('</w>')[0]
+                    if stem == triple[0]:
+                        tok = self.encoder['_WHOLE_']
+                    elif stem == triple[1]:
+                        tok = self.encoder['_PART_']
+                    elif stem == triple[2]:
+                        tok = self.encoder['_ADJECTIVE_']
+                    else:
+                        tok = self.encoder.get(t,0)
+                    text_tokens.append(tok)
+            texts_tokens.append(text_tokens)
+        return texts_tokens
+
 

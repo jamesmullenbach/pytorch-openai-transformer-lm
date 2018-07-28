@@ -8,6 +8,8 @@ import numpy as np
 # from tensorflow.python.framework import function
 from tqdm import tqdm
 
+from text_utils import TextEncoder, TextHideWordsEncoder, TextSelectIndexEncoder
+
 def encode_dataset(*splits, encoder, triples=None):
     encoded_splits = []
     triple_locs = []
@@ -16,9 +18,11 @@ def encode_dataset(*splits, encoder, triples=None):
         locs = []
         for fieldnum, field in enumerate(split):
             if isinstance(field[0], str):
-                if triples:
+                if isinstance(encoder, TextSelectIndexEncoder):
                     field, loc = encoder.encode(field, fieldnum, triples=triples[fold])
                     locs.append(loc)
+                elif isinstance(encoder, TextHideWordsEncoder):
+                    field = encoder.encode(field, triples=triples[fold])
                 else:
                     field = encoder.encode(field)
             fields.append(field)

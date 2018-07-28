@@ -1,6 +1,7 @@
 import argparse
 import os
 import random
+import time
 
 import numpy as np
 import torch
@@ -13,7 +14,7 @@ from analysis import pw as pw_analysis
 from datasets import pw, rocstories
 from model_pytorch import DoubleHeadModel, load_openai_pretrained_model, freeze_transformer_params
 from opt import OpenAIAdam
-from text_utils import TextEncoder, TextSelectIndexEncoder
+from text_utils import TextEncoder, TextHideWordsEncoder, TextSelectIndexEncoder
 from utils import (encode_dataset, iter_data,
                    ResultLogger, make_path)
 from loss import MultipleChoiceLossCompute, ClassificationLossCompute
@@ -143,11 +144,14 @@ def log(save_dir, desc, hard_select):
             torch.save(dh_model.state_dict(), make_path(path))
 
 
-def predict(dataset, submission_dir, test, hard_select):
-    filename = filenames[dataset]
+def predict(dataset, submission_dir, test, hard_select, exec_time):
+    filename = filenames[dataset].replace('.tsv', f'_{exec_time}.tsv')
     pred_fn = pred_fns[dataset]
     label_decoder = label_decoders[dataset]
-    fields = (teX, teM, teL) if hard_select else (teX, teM)
+    if test:
+        fields = (teX, teM, teL) if hard_select else (teX, teM)
+    else:
+        fields = (vaX, vaM, vaL) if hard_select else (vaX, vaM)
     predictions = pred_fn(iter_predict(*fields))
     if label_decoder is not None:
         predictions = [label_decoder[prediction] for prediction in predictions]
@@ -175,6 +179,7 @@ def run_epoch(fields):
             LMB = torch.tensor(lmb, dtype=torch.long).to(device)
             lm_logits, clf_logits = dh_model(XMB, LMB)
         else:
+            import ipdb; ipdb.set_trace()
             lm_logits, clf_logits = dh_model(XMB)
         compute_loss_fct(XMB, YMB, MMB, clf_logits, lm_logits)
         n_updates += 1
@@ -212,12 +217,14 @@ if __name__ == '__main__':
     parser.add_argument('--save_dir', type=str, default='save/')
     parser.add_argument('--data_dir', type=str, default='data/')
     parser.add_argument('--submission_dir', type=str, default='submission/')
+    parser.add_argument('--params_path',    type=str, default='model/params_shapes.json', help="path to params file if using previously finetuned params")
     parser.add_argument('--submit', action='store_true')
     parser.add_argument('--analysis', action='store_true')
     parser.add_argument('--ordinal', action='store_true', help="flag to do 5-class prediction instead of binary")
     parser.add_argument('--test', action='store_true', help="flag to run on test")
     parser.add_argument('--freeze_lm', action='store_true', help="flag to freeze (not update) LM weights - only train the classifier")
     parser.add_argument('--hard_select', action='store_true', help="flag to use as final layer representation the concatenation of hidden states at appropriate indices of input")
+    parser.add_argument('--hide_words', action='store_true', help="flag to replace whole, part, and jj words with special tokens")
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--n_iter', type=int, default=3)
     parser.add_argument('--n_batch', type=int, default=8)
@@ -247,6 +254,7 @@ if __name__ == '__main__':
     parser.add_argument('--n_valid', type=int, default=374)
 
     args = parser.parse_args()
+    args.exec_time = time.strftime('%b_%d_%H:%M:%S', time.localtime())
     print(args)
 
     random.seed(args.seed)
@@ -268,11 +276,13 @@ if __name__ == '__main__':
     n_gpu = torch.cuda.device_count()
     print("device", device, "n_gpu", n_gpu)
 
-    log_file = os.path.join(log_dir, '{}.jsonl'.format(desc))
+    log_file = os.path.join(log_dir, '{}_{}.jsonl'.format(desc, args.exec_time))
     logger = ResultLogger(path=log_file, **args.__dict__)
     # formatting stuff
     if args.hard_select:
         text_encoder = TextSelectIndexEncoder(args.encoder_path, args.bpe_path)
+    elif args.hide_words:
+        text_encoder = TextHideWordsEncoder(args.encoder_path, args.bpe_path)
     else:
         text_encoder = TextEncoder(args.encoder_path, args.bpe_path)
     encoder = text_encoder.encoder
@@ -282,22 +292,22 @@ if __name__ == '__main__':
     if args.dataset == 'rocstories':
         (trX1, trX2, trX3, trY), (vaX1, vaX2, vaX3, vaY), (teX1, teX2, teX3) = encode_dataset(rocstories(data_dir), encoder=text_encoder)
     elif args.dataset == 'pw':
-        if args.hard_select:
-            trdata, dvdata, tedata, triples = pw(data_dir, args.ordinal, args.hard_select)
-            texts_tokens, locs = encode_dataset((trdata, dvdata, tedata), encoder=text_encoder, triples=triples)
-            (trX1, trX2, trY), (vaX1, vaX2, vaY), (teX1, teX2, teY) = texts_tokens
+        if args.hard_select or args.hide_words:
+            trdata, dvdata, tedata, triples = pw(data_dir, args.ordinal, True)
+            if args.hard_select:
+                texts_tokens, locs = encode_dataset((trdata, dvdata, tedata), encoder=text_encoder, triples=triples)
+                (trX1, trX2, trY), (vaX1, vaX2, vaY), (teX1, teX2, teY) = texts_tokens
+            else:
+                (trX1, trX2, trY), (vaX1, vaX2, vaY), (teX1, teX2, teY) = encode_dataset((trdata, dvdata, tedata), encoder=text_encoder, triples=triples)
         else:
             (trX1, trX2, trY), (vaX1, vaX2, vaY), (teX1, teX2, teY) = encode_dataset(pw(data_dir, args.ordinal, args.hard_select), encoder=text_encoder)
     #output: unpadded lists of word indices
 
-    #special tokens
-    encoder['_start_'] = len(encoder)
-    encoder['_delimiter_'] = len(encoder)
-    encoder['_classify_'] = len(encoder)
+    #special token
     clf_token = encoder['_classify_']
 
     #number of special characters
-    n_special = 3
+    n_special = 6 if args.hide_words else 3
 
     max_len = n_ctx // 2 - 2
     #get max length of story + answer in train, val, test
@@ -308,7 +318,6 @@ if __name__ == '__main__':
     elif args.dataset == 'pw':
         n_ctx = min(max([len(x1[:max_len])+len(x2[:max_len]) for x1, x2 in zip(trX1, trX2)]+[len(x1[:max_len])+len(x2[:max_len]) for x1, x2 in zip(vaX1, vaX2)]+[len(x1[:max_len])+len(x2[:max_len]) for x1, x2 in zip(teX1, teX2)])+n_special, n_ctx)
 
-    vocab = n_vocab + n_special + n_ctx
     if args.dataset == 'rocstories':
         trX, trM = transform_roc(trX1, trX2, trX3)
         vaX, vaM = transform_roc(vaX1, vaX2, vaX3)
@@ -335,6 +344,8 @@ if __name__ == '__main__':
         task = 'multiple_choice'
     elif args.dataset == 'pw':
         task = ('inference', 5 if args.ordinal else 2)
+    #if hide words, ignore the extra three we added
+    vocab = n_vocab + n_ctx
     dh_model = DoubleHeadModel(args, clf_token, task, vocab, n_ctx, hard_select=args.hard_select)
 
     criterion = nn.CrossEntropyLoss(reduce=False)
@@ -359,7 +370,15 @@ if __name__ == '__main__':
                                                      criterion,
                                                      args.lm_coef,
                                                      model_opt)
-    load_openai_pretrained_model(dh_model.transformer, n_ctx=n_ctx, n_special=n_special)
+
+    if args.params_path == 'model/params_shapes.json':
+        load_openai_pretrained_model(dh_model.transformer, n_ctx=n_ctx, n_special=n_special)
+    else:
+        sd = torch.load(args.params_path)
+        sd = {(name[7:] if name.startswith('module.') else name):val for name,val in sd.items()}
+        dh_model.load_state_dict(sd)
+        args.n_iter = 0
+
     if args.freeze_lm:
         print("freezing params")
         freeze_transformer_params(dh_model)
@@ -371,9 +390,9 @@ if __name__ == '__main__':
     n_epochs = 0
     if dataset != 'stsb':
         trYt = trY
-    if submit:
-        path = os.path.join(save_dir, desc, 'best_params')
-        torch.save(dh_model.state_dict(), make_path(path))
+    #if submit:
+    #    path = os.path.join(save_dir, desc, 'best_params')
+    #    torch.save(dh_model.state_dict(), make_path(path))
     best_score = 0
     fields = (trX, trM, trYt, trL) if args.hard_select else (trX, trM, trYt)
     for i in range(args.n_iter):
@@ -385,7 +404,8 @@ if __name__ == '__main__':
     if submit:
         path = os.path.join(save_dir, desc, 'best_params')
         dh_model.load_state_dict(torch.load(path))
-        predict(dataset, args.submission_dir, args.test, args.hard_select)
+        predict(dataset, args.submission_dir, args.test, args.hard_select, args.exec_time)
         if args.analysis:
             analy_fn = analyses[dataset]
-            analy_fn(data_dir, os.path.join(args.submission_dir, filenames[dataset]), os.path.join(log_dir, log_file), test=args.test, ordinal=args.ordinal)
+            pred_path = os.path.join(args.submission_dir, filenames[dataset]).replace('.tsv', f'_{args.exec_time}.tsv')
+            analy_fn(data_dir, os.path.join(log_dir, log_file), test=args.test, ordinal=args.ordinal)
