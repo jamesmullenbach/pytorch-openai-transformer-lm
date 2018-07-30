@@ -112,11 +112,22 @@ class TextSelectIndexEncoder(TextEncoder):
             text = self.nlp(text_standardize(ftfy.fix_text(text)))
             text_tokens = []
             loc = [-1,-1,-1]
+            if len(triple[0].split()) > 1:
+                multi1, multi2 = triple[0].split()
+                search_multi = True
+                start_of_multi = False
+            else:
+                search_multi = False
             for token in text:
                 for t in self.bpe(token.text.lower()).split(' '):
                     stem = t.split('</w>')[0]
                     if fieldnum == 0:
-                        if stem == triple[0]:
+                        if search_multi:
+                            if stem == multi1:
+                                start_of_multi = True
+                            elif start_of_multi and stem == multi2:
+                                loc[0] = (len(text_tokens)-1, len(text_tokens))
+                        elif stem == triple[0]:
                             loc[0] = len(text_tokens)
                         elif stem == triple[2]:
                             loc[2] = len(text_tokens)

@@ -244,15 +244,23 @@ class ClfHead(nn.Module):
 class ClfSelectHead(ClfHead):
     def __init__(self, clf_token, cfg, n_class):
         super(ClfSelectHead, self).__init__(clf_token, cfg, n_class)
-        self.linear = nn.Linear(cfg.n_embd*3, n_class)
+        #self.linear = nn.Linear(cfg.n_embd*3, n_class)
+        self.linear = nn.Linear(cfg.n_embd*3, cfg.n_embd)
+        nn.init.normal_(self.linear.weight, std = 0.02)
+        nn.init.normal_(self.linear.bias, 0)
+        self.linear2 = nn.Linear(cfg.n_embd, n_class)
         nn.init.normal_(self.linear.weight, std = 0.02)
         nn.init.normal_(self.linear.bias, 0)
 
     def forward(self, hs, ls):
         #select whole, part, jj vectors
         hss = hs.gather(1, ls.unsqueeze(2).expand(-1, -1, self.n_embd))
+        #average the two states of the whole (which are the same unless it's a multi-word whole)
+        hss = torch.cat([((hss[:,0,:]+hss[:,1,:])/2).unsqueeze(1), hss[:,2:,:]],1)
         clf_h = hss.view(hss.size(0), -1)
-        clf_logits = self.linear(clf_h)
+        clf_h = self.dropout(F.relu(self.linear(clf_h)))
+        #clf_logits = self.linear(clf_h)
+        clf_logits = self.linear2(clf_h)
         return clf_logits
 
 class SimilarityHead(nn.Module):

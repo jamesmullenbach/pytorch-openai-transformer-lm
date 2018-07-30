@@ -44,7 +44,8 @@ def transform_pw(X1, X2, locs=None, hide_words=False):
     n_batch = len(X1)
     xmb = np.zeros((n_batch, n_ctx, 2), dtype=np.int32)
     mmb = np.zeros((n_batch, n_ctx), dtype=np.float32)
-    lmb = np.zeros((n_batch, 3), dtype=np.int32)
+    #size is 4 to deal with multi-word wholes
+    lmb = np.zeros((n_batch, 4), dtype=np.int32)
     start = encoder['_start_']
     delimiter = encoder['_delimiter_']
     fields = (X1, X2, *locs) if locs else (X1, X2)
@@ -52,7 +53,12 @@ def transform_pw(X1, X2, locs=None, hide_words=False):
         if locs:
             x1, x2, *loc = data
             #combine context and part locs. add to compensate for premise and delimiters
-            loc = [loc[0][0]+1, loc[1][1]+len(x1)+2, loc[0][2]+1]
+            if type(loc[0][0]) is tuple:
+                loc = [loc[0][0][0]+1, loc[0][0][1]+1, loc[1][1]+len(x1)+2, loc[0][2]+1]
+            else:
+                #repeat the whole loc, so that each loc is size 4, so that we can deal with multi-word wholes
+                #result will be same for single word wholes since we're averaging two of the same state
+                loc = [loc[0][0]+1, loc[0][0]+1, loc[1][1]+len(x1)+2, loc[0][2]+1]
             lmb[i] = loc
         else:
             x1, x2 = data
@@ -64,8 +70,8 @@ def transform_pw(X1, X2, locs=None, hide_words=False):
         #mask
         mmb[i,:l] = 1
     #position tokens
-    start = n_vocab + (0 if hide_words else n_special)
-    end = n_vocab + n_ctx + (0 if hide_words else n_special)
+    start = n_vocab
+    end = n_vocab + n_ctx
     xmb[:,:,1] = np.arange(start, end)
     return xmb, mmb, lmb
 
