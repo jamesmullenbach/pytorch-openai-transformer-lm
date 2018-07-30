@@ -122,7 +122,7 @@ def iter_predict(Xs, Ms, Ls=None):
     return logits
 
 
-def log(save_dir, desc, hard_select):
+def log(save_dir, desc):
     global best_score
     print("Logging")
     tr_inps = trX[:n_valid], trM[:n_valid], trY[:n_valid]
@@ -142,11 +142,11 @@ def log(save_dir, desc, hard_select):
         score = va_acc
         if score > best_score:
             best_score = score
-            path = os.path.join(save_dir, desc, 'best_params')
+            path = os.path.join(save_dir, desc + '_' + exec_time, 'best_params')
             torch.save(dh_model.state_dict(), make_path(path))
 
 
-def predict(dataset, submission_dir, test, hard_select, exec_time):
+def predict(dataset, submission_dir, test):
     filename = filenames[dataset].replace('.tsv', f'_{exec_time}.tsv')
     pred_fn = pred_fns[dataset]
     label_decoder = label_decoders[dataset]
@@ -163,6 +163,7 @@ def predict(dataset, submission_dir, test, hard_select, exec_time):
         f.write('{}\t{}\n'.format('index', 'prediction'))
         for i, prediction in enumerate(predictions):
             f.write('{}\t{}\n'.format(i, prediction))
+    return path
 
 
 def run_epoch(fields):
@@ -272,15 +273,17 @@ if __name__ == '__main__':
     data_dir = args.data_dir
     log_dir = args.log_dir
     submission_dir = args.submission_dir
+    hard_select = args.hard_select
+    exec_time = args.exec_time
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     n_gpu = torch.cuda.device_count()
     print("device", device, "n_gpu", n_gpu)
 
-    log_file = os.path.join(log_dir, '{}_{}.jsonl'.format(desc, args.exec_time))
+    log_file = os.path.join(log_dir, '{}_{}.jsonl'.format(desc, exec_time))
     logger = ResultLogger(path=log_file, **args.__dict__)
     # formatting stuff
-    if args.hard_select:
+    if hard_select:
         text_encoder = TextSelectIndexEncoder(args.encoder_path, args.bpe_path)
     elif args.hide_words:
         text_encoder = TextHideWordsEncoder(args.encoder_path, args.bpe_path)
@@ -293,15 +296,15 @@ if __name__ == '__main__':
     if args.dataset == 'rocstories':
         (trX1, trX2, trX3, trY), (vaX1, vaX2, vaX3, vaY), (teX1, teX2, teX3) = encode_dataset(rocstories(data_dir), encoder=text_encoder)
     elif args.dataset == 'pw':
-        if args.hard_select or args.hide_words:
+        if hard_select or args.hide_words:
             trdata, dvdata, tedata, triples = pw(data_dir, args.ordinal, True)
-            if args.hard_select:
+            if hard_select:
                 texts_tokens, locs = encode_dataset((trdata, dvdata, tedata), encoder=text_encoder, triples=triples)
                 (trX1, trX2, trY), (vaX1, vaX2, vaY), (teX1, teX2, teY) = texts_tokens
             else:
                 (trX1, trX2, trY), (vaX1, vaX2, vaY), (teX1, teX2, teY) = encode_dataset((trdata, dvdata, tedata), encoder=text_encoder, triples=triples)
         else:
-            (trX1, trX2, trY), (vaX1, vaX2, vaY), (teX1, teX2, teY) = encode_dataset(pw(data_dir, args.ordinal, args.hard_select), encoder=text_encoder)
+            (trX1, trX2, trY), (vaX1, vaX2, vaY), (teX1, teX2, teY) = encode_dataset(pw(data_dir, args.ordinal, hard_select), encoder=text_encoder)
     #output: unpadded lists of word indices
 
     #special token
@@ -326,7 +329,7 @@ if __name__ == '__main__':
         if submit:
             teX, teM = transform_roc(teX1, teX2, teX3)
     elif args.dataset == 'pw':
-        if args.hard_select:
+        if hard_select:
             trX, trM, trL = transform_pw(trX1, trX2, locs[0], hide_words=args.hide_words)
             vaX, vaM, vaL = transform_pw(vaX1, vaX2, locs[1], hide_words=args.hide_words)
             if submit:
@@ -348,7 +351,7 @@ if __name__ == '__main__':
         task = ('inference', 5 if args.ordinal else 2)
     #if hide words, ignore the extra three we added
     vocab = n_vocab + n_ctx
-    dh_model = DoubleHeadModel(args, clf_token, task, vocab, n_ctx, hard_select=args.hard_select)
+    dh_model = DoubleHeadModel(args, clf_token, task, vocab, n_ctx, hard_select=hard_select)
 
     criterion = nn.CrossEntropyLoss(reduce=False)
     model_opt = OpenAIAdam(dh_model.parameters(),
@@ -396,18 +399,17 @@ if __name__ == '__main__':
     #    path = os.path.join(save_dir, desc, 'best_params')
     #    torch.save(dh_model.state_dict(), make_path(path))
     best_score = 0
-    fields = (trX, trM, trYt, trL) if args.hard_select else (trX, trM, trYt)
+    fields = (trX, trM, trYt, trL) if hard_select else (trX, trM, trYt)
     for i in range(args.n_iter):
         print("running epoch", i)
         run_epoch(fields)
         n_epochs += 1
-        log(save_dir, desc, args.hard_select)
+        log(save_dir, desc)
 
     if submit:
         path = os.path.join(save_dir, desc, 'best_params')
         dh_model.load_state_dict(torch.load(path))
-        predict(dataset, args.submission_dir, args.test, args.hard_select, args.exec_time)
+        pred_path = predict(dataset, args.submission_dir, args.test)
         if args.analysis:
             analy_fn = analyses[dataset]
-            pred_path = os.path.join(args.submission_dir, filenames[dataset]).replace('.tsv', f'_{args.exec_time}.tsv')
-            analy_fn(data_dir, os.path.join(log_dir, log_file), test=args.test, ordinal=args.ordinal)
+            analy_fn(data_dir, pred_path, os.path.join(log_dir, log_file), test=args.test, ordinal=args.ordinal)
