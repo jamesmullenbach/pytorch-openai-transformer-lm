@@ -249,8 +249,8 @@ class ClfSelectHead(ClfHead):
         nn.init.normal_(self.linear.weight, std = 0.02)
         nn.init.normal_(self.linear.bias, 0)
         self.linear2 = nn.Linear(cfg.n_embd, n_class)
-        nn.init.normal_(self.linear.weight, std = 0.02)
-        nn.init.normal_(self.linear.bias, 0)
+        nn.init.normal_(self.linear2.weight, std = 0.02)
+        nn.init.normal_(self.linear2.bias, 0)
 
     def forward(self, hs, ls):
         #select whole, part, jj vectors
