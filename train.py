@@ -11,6 +11,7 @@ from sklearn.utils import shuffle
 
 from analysis import rocstories as rocstories_analysis
 from analysis import pw as pw_analysis
+from analysis import pw_retrieved as pw_retrieved_analysis
 from datasets import pw, rocstories
 from model_pytorch import DoubleHeadModel, load_openai_pretrained_model, freeze_transformer_params
 from opt import OpenAIAdam
@@ -37,6 +38,47 @@ def transform_roc(X1, X2, X3):
     xmb[:, :, :, 1] = np.arange(n_vocab + n_special, n_vocab + n_special + n_ctx)
     return xmb, mmb
 
+def combine_locs(x1, x2, loc):
+    #combine context and part locs. add to compensate for premise and delimiters
+    #save four locations for whole, two locations for part and jj, for size consistency
+    new_loc = []
+
+    for ix, (l1,l2) in enumerate(zip(*loc)):
+        #spaghetti code to deal with multi-word wholes......
+        if ix == 0:
+            if type(l1) is tuple:
+                #multi-word whole in sentence 1
+                new_loc.extend([l1[0]+1, l1[1]+1])
+            elif l1 != -1:
+                #whole in sentence 1
+                new_loc.extend([l1+1, l1+1])
+            else:
+                #whole must be in sentence 2
+                if type(l2) is tuple:
+                    new_loc.extend([l2[0]+len(x1)+2, l2[1]+len(x1)+2])
+                else:
+                    new_loc.extend([l2+len(x1)+2, l2+len(x1)+2])
+            if type(l2) is tuple:
+                #multi-word whole in sentence 2
+                new_loc.extend([l2[0]+len(x1)+2, l2[1]+len(x1)+2])
+            elif l2 != -1:
+                #whole in sentence 2
+                new_loc.extend([l2+len(x1)+2, l2+len(x1)+2])
+            else:
+                #whole must be in sentence 1
+                if type(l1) is tuple:
+                    new_loc.extend([l1[0]+1, l1[1]+1])
+                else:
+                    new_loc.extend([l1+1, l1+1])
+        else:
+            if l1 == -1:
+                new_loc.extend([l2+len(x2)+2, l2+len(x2)+2])
+            elif l2 == -1:
+                new_loc.extend([l1+1, l1+1])
+            else:
+                new_loc.extend([l1+1, l2+len(x2)+2])
+    return new_loc
+
 def transform_pw(X1, X2, locs=None, hide_words=False):
     """
         Glue stories together with delimiter and stuff, and add position tokens
@@ -44,21 +86,15 @@ def transform_pw(X1, X2, locs=None, hide_words=False):
     n_batch = len(X1)
     xmb = np.zeros((n_batch, n_ctx, 2), dtype=np.int32)
     mmb = np.zeros((n_batch, n_ctx), dtype=np.float32)
-    #size is 4 to deal with multi-word wholes
-    lmb = np.zeros((n_batch, 4), dtype=np.int32)
+    #size is 8 - see combine_locs
+    lmb = np.zeros((n_batch, 8), dtype=np.int32)
     start = encoder['_start_']
     delimiter = encoder['_delimiter_']
     fields = (X1, X2, *locs) if locs else (X1, X2)
     for i, (data) in enumerate(zip(*fields)):
         if locs:
             x1, x2, *loc = data
-            #combine context and part locs. add to compensate for premise and delimiters
-            if type(loc[0][0]) is tuple:
-                loc = [loc[0][0][0]+1, loc[0][0][1]+1, loc[1][1]+len(x1)+2, loc[0][2]+1]
-            else:
-                #repeat the whole loc, so that each loc is size 4, so that we can deal with multi-word wholes
-                #result will be same for single word wholes since we're averaging two of the same state
-                loc = [loc[0][0]+1, loc[0][0]+1, loc[1][1]+len(x1)+2, loc[0][2]+1]
+            loc = combine_locs(x1, x2, loc)
             lmb[i] = loc
         else:
             x1, x2 = data
@@ -184,11 +220,14 @@ def run_epoch(fields):
         XMB = torch.tensor(xmb, dtype=torch.long).to(device)
         YMB = torch.tensor(ymb, dtype=torch.long).to(device)
         MMB = torch.tensor(mmb).to(device)
-        if len(fields) > 3:
-            LMB = torch.tensor(lmb, dtype=torch.long).to(device)
-            lm_logits, clf_logits = dh_model(XMB, LMB)
-        else:
-            lm_logits, clf_logits = dh_model(XMB)
+        try:
+            if len(fields) > 3:
+                LMB = torch.tensor(lmb, dtype=torch.long).to(device)
+                lm_logits, clf_logits = dh_model(XMB, LMB)
+            else:
+                lm_logits, clf_logits = dh_model(XMB)
+        except:
+            import pdb; pdb.set_trace()
         compute_loss_fct(XMB, YMB, MMB, clf_logits, lm_logits)
         n_updates += 1
         if n_updates in [1000, 2000, 4000, 8000, 16000, 32000] and n_epochs == 0:
@@ -200,27 +239,31 @@ argmax = lambda x: np.argmax(x, 1)
 pred_fns = {
     'rocstories': argmax,
     'pw': argmax,
+    'pw-retrieved': argmax,
 }
 
 filenames = {
     'rocstories': 'ROCStories.tsv',
     'pw': 'pw_preds.tsv',
+    'pw-retrieved': 'pw_retrieved_preds.tsv',
 }
 
 label_decoders = {
     'rocstories': None,
     'pw': None,
+    'pw-retrieved': None,
 }
 
 analyses = {
     'rocstories': rocstories_analysis,
-    'pw': pw_analysis
+    'pw': pw_analysis,
+    'pw-retrieved': pw_retrieved_analysis,
 }
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--desc', type=str, help="Description")
-    parser.add_argument('--dataset', choices=['pw', 'rocstories'])
+    parser.add_argument('--dataset', choices=['pw', 'rocstories', 'pw-retrieved'])
     parser.add_argument('--log_dir', type=str, default='log/')
     parser.add_argument('--save_dir', type=str, default='save/')
     parser.add_argument('--data_dir', type=str, default='data/')
@@ -301,16 +344,17 @@ if __name__ == '__main__':
     print("Encoding dataset...")
     if args.dataset == 'rocstories':
         (trX1, trX2, trX3, trY), (vaX1, vaX2, vaX3, vaY), (teX1, teX2, teX3) = encode_dataset(rocstories(data_dir), encoder=text_encoder)
-    elif args.dataset == 'pw':
+    elif args.dataset.startswith('pw'):
+        train_file = os.path.join(data_dir, ('retrieved_train_feats.jsonl') if args.dataset == 'pw-retrieved' else 'snli_style_train_feats.jsonl')
         if hard_select or args.hide_words:
-            trdata, dvdata, tedata, triples = pw(data_dir, args.ordinal, True)
+            trdata, dvdata, tedata, triples = pw(train_file, args.ordinal, True)
             if hard_select:
                 texts_tokens, locs = encode_dataset((trdata, dvdata, tedata), encoder=text_encoder, triples=triples)
                 (trX1, trX2, trY), (vaX1, vaX2, vaY), (teX1, teX2, teY) = texts_tokens
             else:
                 (trX1, trX2, trY), (vaX1, vaX2, vaY), (teX1, teX2, teY) = encode_dataset((trdata, dvdata, tedata), encoder=text_encoder, triples=triples)
         else:
-            (trX1, trX2, trY), (vaX1, vaX2, vaY), (teX1, teX2, teY) = encode_dataset(pw(data_dir, args.ordinal, hard_select), encoder=text_encoder)
+            (trX1, trX2, trY), (vaX1, vaX2, vaY), (teX1, teX2, teY) = encode_dataset(pw(train_file, args.ordinal, hard_select), encoder=text_encoder)
     #output: unpadded lists of word indices
 
     #special token
@@ -326,7 +370,7 @@ if __name__ == '__main__':
     #the 3 is to take care of the special start, delimiter, end tokens
     if args.dataset == 'rocstories':
         n_ctx = min(max([len(x1[:max_len])+max(len(x2[:max_len]), len(x3[:max_len])) for x1, x2, x3 in zip(trX1, trX2, trX3)]+[len(x1[:max_len])+max(len(x2[:max_len]), len(x3[:max_len])) for x1, x2, x3 in zip(vaX1, vaX2, vaX3)]+[len(x1[:max_len])+max(len(x2[:max_len]), len(x3[:max_len])) for x1, x2, x3 in zip(teX1, teX2, teX3)])+n_special, n_ctx)
-    elif args.dataset == 'pw':
+    elif args.dataset.startswith('pw'):
         n_ctx = min(max([len(x1[:max_len])+len(x2[:max_len]) for x1, x2 in zip(trX1, trX2)]+[len(x1[:max_len])+len(x2[:max_len]) for x1, x2 in zip(vaX1, vaX2)]+[len(x1[:max_len])+len(x2[:max_len]) for x1, x2 in zip(teX1, teX2)])+n_special, n_ctx)
 
     if args.dataset == 'rocstories':
@@ -334,8 +378,9 @@ if __name__ == '__main__':
         vaX, vaM = transform_roc(vaX1, vaX2, vaX3)
         if submit:
             teX, teM = transform_roc(teX1, teX2, teX3)
-    elif args.dataset == 'pw':
+    elif args.dataset.startswith('pw'):
         if hard_select:
+            print("encoding locs")
             trX, trM, trL = transform_pw(trX1, trX2, locs[0], hide_words=args.hide_words)
             vaX, vaM, vaL = transform_pw(vaX1, vaX2, locs[1], hide_words=args.hide_words)
             if submit:
@@ -353,7 +398,7 @@ if __name__ == '__main__':
 
     if args.dataset == 'rocstories':
         task = 'multiple_choice'
-    elif args.dataset == 'pw':
+    elif args.dataset.startswith('pw'):
         task = ('inference', 5 if args.ordinal else 2)
     #if hide words, ignore the extra three we added
     vocab = n_vocab + n_ctx
@@ -376,7 +421,7 @@ if __name__ == '__main__':
                                                      criterion,
                                                      args.lm_coef,
                                                      model_opt)
-    elif args.dataset == 'pw':
+    elif args.dataset.startswith('pw'):
         compute_loss_fct = ClassificationLossCompute(criterion,
                                                      criterion,
                                                      args.lm_coef,

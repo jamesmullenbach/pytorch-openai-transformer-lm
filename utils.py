@@ -19,7 +19,7 @@ def encode_dataset(*splits, encoder, triples=None):
         for fieldnum, field in enumerate(split):
             if isinstance(field[0], str):
                 if isinstance(encoder, TextSelectIndexEncoder):
-                    field, loc = encoder.encode(field, fieldnum, triples=triples[fold])
+                    field, loc = encoder.encode(field, triples=triples[fold])
                     locs.append(loc)
                 elif isinstance(encoder, TextHideWordsEncoder):
                     field = encoder.encode(field, triples=triples[fold])

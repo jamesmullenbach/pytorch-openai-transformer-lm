@@ -105,7 +105,16 @@ class TextEncoder(object):
 
 class TextSelectIndexEncoder(TextEncoder):
 
-    def encode(self, texts, fieldnum, triples=None, hide_words=False, verbose=True):
+    def append_or_replace(self, loc, ix, val):
+        if loc[ix] == -1:
+            loc[ix] = val
+        elif type(loc[ix]) == tuple:
+            loc[ix] = (*loc[ix], val)
+        else:
+            loc[ix] = (loc[ix], val)
+        return loc
+
+    def encode(self, texts, triples=None, hide_words=False, verbose=True):
         texts_tokens = []
         locs = []
         for text, triple in tqdm(zip(texts, triples), ncols=80, leave=False, disable=not verbose):
@@ -121,18 +130,17 @@ class TextSelectIndexEncoder(TextEncoder):
             for token in text:
                 for t in self.bpe(token.text.lower()).split(' '):
                     stem = t.split('</w>')[0]
-                    if fieldnum == 0:
-                        if search_multi:
-                            if stem == multi1:
-                                start_of_multi = True
-                            elif start_of_multi and stem == multi2:
-                                loc[0] = (len(text_tokens)-1, len(text_tokens))
-                        elif stem == triple[0]:
-                            loc[0] = len(text_tokens)
-                        elif stem == triple[2]:
-                            loc[2] = len(text_tokens)
-                    elif fieldnum == 1 and stem == triple[1]:
+                    if search_multi:
+                        if stem == multi1:
+                            start_of_multi = True
+                        elif start_of_multi and stem == multi2:
+                            loc = self.append_or_replace(loc, 0, (len(text_tokens)-1, len(text_tokens)))
+                    elif stem == triple[0]:
+                        loc = self.append_or_replace(loc, 0, len(text_tokens))
+                    elif stem == triple[1]:
                         loc[1] = len(text_tokens)
+                    elif stem == triple[2]:
+                        loc[2] = len(text_tokens)
                     text_tokens.append(self.encoder.get(t,0))
             texts_tokens.append(text_tokens)
             locs.append(loc)

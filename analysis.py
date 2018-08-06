@@ -28,3 +28,15 @@ def pw(data_dir, pred_path, log_path, test=False, ordinal=False):
     print(f"PW valid acc: {val_acc: %2.2f}")
     print(f"PW {fold} acc: {val_acc: %2.2f}")
     print(confusion_matrix(labels, preds))
+
+def pw_retrieved(data_dir, pred_path, log_path, test=False, ordinal=False):
+    preds = pd.read_csv(pred_path, delimiter='\t')['prediction'].values.tolist()
+    fold = 'test' if test else 'dev'
+    _, _, labels, _ = read_pws(os.path.join(data_dir, f'retrieved_{fold}_feats.jsonl'), ordinal, False)
+    acc = accuracy_score(labels, preds)*100.
+    logs = [json.loads(line) for line in open(log_path)][1:]
+    best_validation_index = np.argmax([log['va_acc'] for log in logs])
+    val_acc = logs[best_validation_index]['va_acc']
+    print(f"PW valid acc: {val_acc: %2.2f}")
+    print(f"PW {fold} acc: {val_acc: %2.2f}")
+    print(confusion_matrix(labels, preds))

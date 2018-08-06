@@ -255,11 +255,10 @@ class ClfSelectHead(ClfHead):
     def forward(self, hs, ls):
         #select whole, part, jj vectors
         hss = hs.gather(1, ls.unsqueeze(2).expand(-1, -1, self.n_embd))
-        #average the two states of the whole (which are the same unless it's a multi-word whole)
-        hss = torch.cat([((hss[:,0,:]+hss[:,1,:])/2).unsqueeze(1), hss[:,2:,:]],1)
-        clf_h = hss.view(hss.size(0), -1)
-        clf_h = self.dropout(F.relu(self.linear(clf_h)))
+        #average the states of the components
+        clf_h = torch.cat([torch.mean(hss[:,:4,:],dim=1), torch.mean(hss[:,4:6,:],dim=1), torch.mean(hss[:,6:,:],dim=1)], dim=1)
         #clf_logits = self.linear(clf_h)
+        clf_h = self.dropout(F.relu(self.linear(clf_h)))
         clf_logits = self.linear2(clf_h)
         return clf_logits
 

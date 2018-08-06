@@ -66,10 +66,10 @@ def rocstories(data_dir, n_train=1497, n_valid=374):
     vaY = np.asarray(vaY, dtype=np.int32)
     return (trX1, trX2, trX3, trY), (vaX1, vaX2, vaX3, vaY), (teX1, teX2, teX3)
 
-def pw(data_dir, ordinal, ret_trips):
-    tr_prems, tr_hyps, trY, trtrips = read_pws(os.path.join(data_dir, 'snli_style_train_feats.jsonl'), ordinal, ret_trips)
-    dv_prems, dv_hyps, dvY, dvtrips = read_pws(os.path.join(data_dir, 'snli_style_dev_feats.jsonl'), ordinal, ret_trips)
-    te_prems, te_hyps, teY, tetrips = read_pws(os.path.join(data_dir, 'snli_style_test_feats.jsonl'), ordinal, ret_trips)
+def pw(train_file, ordinal, ret_trips):
+    tr_prems, tr_hyps, trY, trtrips = read_pws(train_file, ordinal, ret_trips)
+    dv_prems, dv_hyps, dvY, dvtrips = read_pws(train_file.replace('train', 'dev'), ordinal, ret_trips)
+    te_prems, te_hyps, teY, tetrips = read_pws(train_file.replace('train', 'test'), ordinal, ret_trips)
     trY = np.asarray(trY, dtype=np.int32)
     dvY = np.asarray(dvY, dtype=np.int32)
     teY = np.asarray(teY, dtype=np.int32)
