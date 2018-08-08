@@ -91,7 +91,8 @@ def transform_pw(X1, X2, locs=None, hide_words=False):
     start = encoder['_start_']
     delimiter = encoder['_delimiter_']
     fields = (X1, X2, *locs) if locs else (X1, X2)
-    for i, (data) in enumerate(zip(*fields)):
+    i = 0
+    for data in zip(*fields):
         if locs:
             x1, x2, *loc = data
             if len(x1) > max_len or len(x2) > max_len or len(x1) + len(x2) > n_ctx:
@@ -108,6 +109,7 @@ def transform_pw(X1, X2, locs=None, hide_words=False):
         xmb[i,:l,0] = x
         #mask
         mmb[i,:l] = 1
+        i += 1
     #position tokens
     start = n_vocab
     end = n_vocab + n_ctx
@@ -215,11 +217,11 @@ def run_epoch(fields):
     for ix,field in enumerate(iter_data(*shuffle(*fields, random_state=np.random),
                                    n_batch=n_batch_train, truncate=True, verbose=True)):
         global n_updates
-        if ix == 246:
-            import pdb; pdb.set_trace()
         if n_gpu > 1 and np.isnan(dh_model.module.transformer.embed.weight.data.cpu().numpy()).any():
+            print("null")
             import pdb; pdb.set_trace()
         elif n_gpu <= 1 and np.isnan(dh_model.transformer.embed.weight.data.cpu().numpy()).any():
+            print("null")
             import pdb; pdb.set_trace()
         dh_model.train()
         if len(fields) == 3:
