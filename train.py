@@ -72,11 +72,11 @@ def combine_locs(x1, x2, loc):
                     new_loc.extend([l1+1, l1+1])
         else:
             if l1 == -1:
-                new_loc.extend([l2+len(x2)+2, l2+len(x2)+2])
+                new_loc.extend([l2+len(x1)+2, l2+len(x1)+2])
             elif l2 == -1:
                 new_loc.extend([l1+1, l1+1])
             else:
-                new_loc.extend([l1+1, l2+len(x2)+2])
+                new_loc.extend([l1+1, l2+len(x1)+2])
     return new_loc
 
 def transform_pw(X1, X2, locs=None, hide_words=False):
@@ -94,6 +94,9 @@ def transform_pw(X1, X2, locs=None, hide_words=False):
     for i, (data) in enumerate(zip(*fields)):
         if locs:
             x1, x2, *loc = data
+            if len(x1) > max_len or len(x2) > max_len or len(x1) + len(x2) > n_ctx:
+                #too long, don't deal
+                continue
             loc = combine_locs(x1, x2, loc)
             lmb[i] = loc
         else:
@@ -209,9 +212,15 @@ def predict(dataset, submission_dir, test):
 
 
 def run_epoch(fields):
-    for field in iter_data(*shuffle(*fields, random_state=np.random),
-                                   n_batch=n_batch_train, truncate=True, verbose=True):
+    for ix,field in enumerate(iter_data(*shuffle(*fields, random_state=np.random),
+                                   n_batch=n_batch_train, truncate=True, verbose=True)):
         global n_updates
+        if ix == 246:
+            import pdb; pdb.set_trace()
+        if n_gpu > 1 and np.isnan(dh_model.module.transformer.embed.weight.data.cpu().numpy()).any():
+            import pdb; pdb.set_trace()
+        elif n_gpu <= 1 and np.isnan(dh_model.transformer.embed.weight.data.cpu().numpy()).any():
+            import pdb; pdb.set_trace()
         dh_model.train()
         if len(fields) == 3:
             xmb, mmb, ymb = field
@@ -220,15 +229,12 @@ def run_epoch(fields):
         XMB = torch.tensor(xmb, dtype=torch.long).to(device)
         YMB = torch.tensor(ymb, dtype=torch.long).to(device)
         MMB = torch.tensor(mmb).to(device)
-        try:
-            if len(fields) > 3:
-                LMB = torch.tensor(lmb, dtype=torch.long).to(device)
-                lm_logits, clf_logits = dh_model(XMB, LMB)
-            else:
-                lm_logits, clf_logits = dh_model(XMB)
-        except:
-            import pdb; pdb.set_trace()
-        compute_loss_fct(XMB, YMB, MMB, clf_logits, lm_logits)
+        if len(fields) > 3:
+            LMB = torch.tensor(lmb, dtype=torch.long).to(device)
+            lm_logits, clf_logits = dh_model(XMB, LMB)
+        else:
+            lm_logits, clf_logits = dh_model(XMB)
+        compute_loss_fct(XMB, YMB, MMB, clf_logits, lm_logits)#, debug=ix==39)
         n_updates += 1
         if n_updates in [1000, 2000, 4000, 8000, 16000, 32000] and n_epochs == 0:
             log(save_dir, desc)
@@ -345,7 +351,7 @@ if __name__ == '__main__':
     if args.dataset == 'rocstories':
         (trX1, trX2, trX3, trY), (vaX1, vaX2, vaX3, vaY), (teX1, teX2, teX3) = encode_dataset(rocstories(data_dir), encoder=text_encoder)
     elif args.dataset.startswith('pw'):
-        train_file = os.path.join(data_dir, ('retrieved_train_feats.jsonl') if args.dataset == 'pw-retrieved' else 'snli_style_train_feats.jsonl')
+        train_file = os.path.join(data_dir, ('retrieved_2_train_feats.jsonl') if args.dataset == 'pw-retrieved' else 'snli_style_train_feats.jsonl')
         if hard_select or args.hide_words:
             trdata, dvdata, tedata, triples = pw(train_file, args.ordinal, True)
             if hard_select:
@@ -440,7 +446,8 @@ if __name__ == '__main__':
         freeze_transformer_params(dh_model)
 
     dh_model.to(device)
-    dh_model = nn.DataParallel(dh_model)
+    if n_gpu > 1:
+        dh_model = nn.DataParallel(dh_model)
 
     n_updates = 0
     n_epochs = 0
