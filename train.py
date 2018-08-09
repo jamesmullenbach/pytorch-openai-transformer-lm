@@ -83,38 +83,43 @@ def transform_pw(X1, X2, locs=None, hide_words=False):
     """
         Glue stories together with delimiter and stuff, and add position tokens
     """
-    n_batch = len(X1)
-    xmb = np.zeros((n_batch, n_ctx, 2), dtype=np.int32)
-    mmb = np.zeros((n_batch, n_ctx), dtype=np.float32)
+    xmb = []#np.zeros((n_batch, n_ctx, 2), dtype=np.int32)
+    mmb = []#np.zeros((n_batch, n_ctx), dtype=np.float32)
     #size is 8 - see combine_locs
-    lmb = np.zeros((n_batch, 8), dtype=np.int32)
+    lmb = []#np.zeros((n_batch, 8), dtype=np.int32)
     start = encoder['_start_']
     delimiter = encoder['_delimiter_']
     fields = (X1, X2, *locs) if locs else (X1, X2)
-    i = 0
-    for data in zip(*fields):
+
+    #position tokens
+    start = n_vocab
+    end = n_vocab + n_ctx
+    pos_toks = np.arange(start, end)
+
+    idxs = []
+    for idx,data in enumerate(zip(*fields)):
         if locs:
             x1, x2, *loc = data
             if len(x1) > max_len or len(x2) > max_len or len(x1) + len(x2) > n_ctx:
                 #too long, don't deal
                 continue
             loc = combine_locs(x1, x2, loc)
-            lmb[i] = loc
+            if not any(loc) or not any(x1) or not any(x2):
+                continue
+            lmb.append(loc)
         else:
             x1, x2 = data
         #concatenate
         x = [start] + x1[:max_len]+[delimiter]+x2[:max_len]+[clf_token]
         l = len(x)
         #set np array
-        xmb[i,:l,0] = x
+        #xmb[i,:l,0] = x
+        xmb.append(np.vstack((x + [0] * (n_ctx - l), pos_toks)))
         #mask
-        mmb[i,:l] = 1
-        i += 1
-    #position tokens
-    start = n_vocab
-    end = n_vocab + n_ctx
-    xmb[:,:,1] = np.arange(start, end)
-    return xmb, mmb, lmb
+        #mmb[i,:l] = 1
+        mmb.append([1] * l + [0] * (n_ctx - l))
+        idxs.append(idx)
+    return np.array(xmb), np.array(mmb), np.array(lmb), idxs
 
 def iter_apply(Xs, Ms, Ys, Ls=None):
     # fns = [lambda x: np.concatenate(x, 0), lambda x: float(np.sum(x))]
@@ -228,9 +233,9 @@ def run_epoch(fields):
             xmb, mmb, ymb = field
         else:
             xmb, mmb, ymb, lmb = field
-        XMB = torch.tensor(xmb, dtype=torch.long).to(device)
+        XMB = torch.tensor(xmb, dtype=torch.long).to(device).transpose(1,2)
         YMB = torch.tensor(ymb, dtype=torch.long).to(device)
-        MMB = torch.tensor(mmb).to(device)
+        MMB = torch.tensor(mmb, dtype=torch.float).to(device)
         if len(fields) > 3:
             LMB = torch.tensor(lmb, dtype=torch.long).to(device)
             lm_logits, clf_logits = dh_model(XMB, LMB)
@@ -389,15 +394,21 @@ if __name__ == '__main__':
     elif args.dataset.startswith('pw'):
         if hard_select:
             print("encoding locs")
-            trX, trM, trL = transform_pw(trX1, trX2, locs[0], hide_words=args.hide_words)
-            vaX, vaM, vaL = transform_pw(vaX1, vaX2, locs[1], hide_words=args.hide_words)
+            trX, trM, trL, idxs = transform_pw(trX1, trX2, locs[0], hide_words=args.hide_words)
+            trY = trY[idxs]
+            vaX, vaM, vaL, idxs = transform_pw(vaX1, vaX2, locs[1], hide_words=args.hide_words)
+            vaY = vaY[idxs]
             if submit:
-                teX, teM, teL = transform_pw(teX1, teX2, locs[2], hide_words=args.hide_words)
+                teX, teM, teL, idxs = transform_pw(teX1, teX2, locs[2], hide_words=args.hide_words)
+                teY = teY[idxs]
         else:
-            trX, trM, _ = transform_pw(trX1, trX2, hide_words=args.hide_words)
-            vaX, vaM, _ = transform_pw(vaX1, vaX2, hide_words=args.hide_words)
+            trX, trM, _, idxs = transform_pw(trX1, trX2, hide_words=args.hide_words)
+            trY = trY[idxs]
+            vaX, vaM, _, idxs = transform_pw(vaX1, vaX2, hide_words=args.hide_words)
+            vaY = vaY[idxs]
             if submit:
-                teX, teM, _ = transform_pw(teX1, teX2, hide_words=args.hide_words)
+                teX, teM, _, idxs = transform_pw(teX1, teX2, hide_words=args.hide_words)
+                teY = teY[idxs]
 
     n_train = len(trY)
     n_valid = len(vaY)
